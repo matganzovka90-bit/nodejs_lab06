@@ -16,13 +16,12 @@ primary_region = 'ams'
   min_machines_running = 0
   processes = ['app']
 
-  [[services.http_checks]]
-    interval = "20s"       
-    grace_period = "30s"     
+  [[http_service.checks]]
+    grace_period = "15s"   
+    interval = "30s"
     method = "get"
-    path = "/health"   
-    port = 3000
-    protocol = "http"
+    path = "/health"
+    port = 3000          
     timeout = "5s"
 
 [[vm]]
