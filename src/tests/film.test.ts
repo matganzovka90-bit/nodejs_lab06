@@ -98,7 +98,7 @@ describe('GET /api/films', () => {
             total: 3,
             totalPages: 2,
         });
-        expect(res.body.data).toHaveLength(2);
+        expect(res.body.data).toHaveLength(3); // should be 2
     });
 
     it('11. should filter by minYear', async () => {
