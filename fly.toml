@@ -21,6 +21,7 @@ primary_region = 'ams'
     grace_period = "5s"     
     method = "get"
     path = "/health"   
+    port = 3000
     protocol = "http"
     timeout = "2s"
 
