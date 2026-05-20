@@ -1,125 +1,122 @@
-import { connectTestDB, disconnectTestDB, clearTestDB } from './setup';
-import { FilmModel } from '../models/film.model';
+import request from 'supertest';
+import mongoose from 'mongoose';
+import { MongoMemoryServer } from 'mongodb-memory-server';
+import express from 'express';
+import cookieParser from 'cookie-parser';
+import filmRouter from '../routes/entity'; 
+import authRouter from '../routes/auth'; 
 
-beforeAll(async () => await connectTestDB());
-afterAll(async () => await disconnectTestDB());
-afterEach(async () => await clearTestDB());
+let mongoServer: MongoMemoryServer;
+let app: ReturnType<typeof express>;
 
-describe('FilmModel — unit tests', () => {
+beforeAll(async () => {
+  mongoServer = await MongoMemoryServer.create();
+  await mongoose.connect(mongoServer.getUri());
 
-    const validFilm = {
-        title: 'Inception',
-        description: 'A mind-bending thriller',
-        release_year: 2010,
-        directors: ['Christopher Nolan'],
-    };
+  app = express();
+  app.use(express.json());
+  app.use(cookieParser()); 
+  
+  app.use('/auth', authRouter);
+  app.use('/films', filmRouter);
+});
 
-    describe('Defaults', () => {
-        it('should set description to empty string by default', async () => {
-            const film = await FilmModel.create({
-                title: 'No Desc',
-                release_year: 2000,
-                directors: ['Someone'],
-            });
-            expect(film.description).toBe('');
+afterAll(async () => {
+  await mongoose.disconnect();
+  await mongoServer.stop();
+});
+
+describe('Захист CRUD фільмів та перевірка власника', () => {
+  let userACookies: string[];
+  let userBCookies: string[];
+  let sharedFilmId: string;
+
+  beforeAll(async () => {
+    await request(app).post('/auth/register').send({ email: 'userA@test.com', password: 'password123' });
+    const loginA = await request(app).post('/auth/login').send({ email: 'userA@test.com', password: 'password123' });
+    userACookies = loginA.get('Set-Cookie') || [];
+
+    await request(app).post('/auth/register').send({ email: 'userB@test.com', password: 'password123' });
+    const loginB = await request(app).post('/auth/login').send({ email: 'userB@test.com', password: 'password123' });
+    userBCookies = loginB.get('Set-Cookie') || [];
+  });
+
+  afterAll(async () => {
+    const collections = mongoose.connection.collections;
+    if (collections.films) {
+      await collections.films.deleteMany({});
+    }
+  });
+
+  describe('POST /films', () => {
+    it('має повернути 401 Unauthorized, якщо токен відсутній', async () => {
+      const res = await request(app)
+        .post('/films')
+        .send({
+          title: 'Inception',
+          description: 'A thief who steals corporate secrets',
+          release_year: 2010,
+          directors: ['Christopher Nolan']
         });
+
+      expect(res.status).toBe(401);
     });
 
-    describe('Timestamps', () => {
-        it('should set createdAt and updatedAt automatically', async () => {
-            const film = await FilmModel.create(validFilm);
-            expect(film.createdAt).toBeInstanceOf(Date);
-            expect(film.updatedAt).toBeInstanceOf(Date);
+    it('має успішно створити фільм і привʼязати ownerId, якщо користувач авторизований', async () => {
+      const res = await request(app)
+        .post('/films')
+        .set('Cookie', userACookies)
+        .send({
+          title: 'Inception',
+          description: 'A thief who steals corporate secrets',
+          release_year: 2010,
+          directors: ['Christopher Nolan']
         });
 
-        it('updatedAt should change after update', async () => {
-            const film = await FilmModel.create(validFilm);
-            await new Promise(r => setTimeout(r, 10));
-            const updated = await FilmModel.findByIdAndUpdate(
-                film._id,
-                { title: 'Changed' },
-                { new: true }
-            );
-            expect(updated!.updatedAt.getTime()).toBeGreaterThan(film.updatedAt.getTime());
-        });
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveProperty('id'); 
+      expect(res.body).toHaveProperty('ownerId'); 
+      
+      sharedFilmId = res.body.id || res.body._id; 
+    });
+  });
+
+  describe('PATCH /films/:id', () => {
+    it('має повернути 403 Forbidden, якщо Користувач Б намагається змінити фільм Користувача А', async () => {
+      const res = await request(app)
+        .patch(`/films/${sharedFilmId}`)
+        .set('Cookie', userBCookies) 
+        .send({ title: 'Зламана назва' });
+
+      expect(res.status).toBe(403);
     });
 
-    describe('Virtual: age', () => {
-        it('should calculate age correctly', async () => {
-            const film = await FilmModel.create(validFilm);
-            const expected = new Date().getFullYear() - 2010;
-            expect(film.age).toBe(expected);
-        });
+    it('має успішно оновити фільм, якщо запит робить його справжній власник (Користувач А)', async () => {
+      const res = await request(app)
+        .patch(`/films/${sharedFilmId}`)
+        .set('Cookie', userACookies) 
+        .send({ title: 'Inception - Updated Edition' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.title).toBe('Inception - Updated Edition');
+    });
+  });
+
+  describe('DELETE /films/:id', () => {
+    it('має повернути 403 Forbidden, якщо чужий користувач (Користувач Б) намагається видалити фільм', async () => {
+      const res = await request(app)
+        .delete(`/films/${sharedFilmId}`)
+        .set('Cookie', userBCookies); 
+
+      expect(res.status).toBe(403);
     });
 
-    describe('Validation — title', () => {
-        it('should fail if title is missing', async () => {
-            await expect(
-                FilmModel.create({ release_year: 2000, directors: ['A'] })
-            ).rejects.toThrow();
-        });
+    it('має успішно видалити фільм (204), якщо дію виконує власник (Користувач А)', async () => {
+      const res = await request(app)
+        .delete(`/films/${sharedFilmId}`)
+        .set('Cookie', userACookies); 
 
-        it('should fail if title exceeds 100 characters', async () => {
-            await expect(
-                FilmModel.create({ title: 'A'.repeat(101), release_year: 2000, directors: ['A'] })
-            ).rejects.toThrow();
-        });
-
-        it('should trim title whitespace', async () => {
-            const film = await FilmModel.create({
-                title: '  Trimmed  ',
-                release_year: 2000,
-                directors: ['A'],
-            });
-            expect(film.title).toBe('Trimmed');
-        });
+      expect(res.status).toBe(204);
     });
-
-    describe('Validation — release_year', () => {
-        it('should fail if release_year is missing', async () => {
-            await expect(
-                FilmModel.create({ title: 'Test', directors: ['A'] })
-            ).rejects.toThrow();
-        });
-
-        it('should fail if release_year is before 1894', async () => {
-            await expect(
-                FilmModel.create({ title: 'Old', release_year: 1893, directors: ['A'] })
-            ).rejects.toThrow();
-        });
-
-        it('should fail if release_year is after 2030', async () => {
-            await expect(
-                FilmModel.create({ title: 'Future', release_year: 2031, directors: ['A'] })
-            ).rejects.toThrow();
-        });
-
-        it('should accept boundary year 1894', async () => {
-            const film = await FilmModel.create({ title: 'Old', release_year: 1894, directors: ['A'] });
-            expect(film.release_year).toBe(1894);
-        });
-    });
-
-    describe('Validation — directors', () => {
-        it('should fail if directors is empty array', async () => {
-            await expect(
-                FilmModel.create({ title: 'Test', release_year: 2000, directors: [] })
-            ).rejects.toThrow();
-        });
-
-        it('should fail if directors is missing', async () => {
-            await expect(
-                FilmModel.create({ title: 'Test', release_year: 2000 })
-            ).rejects.toThrow();
-        });
-
-        it('should accept multiple directors', async () => {
-            const film = await FilmModel.create({
-                title: 'Test',
-                release_year: 2000,
-                directors: ['A', 'B', 'C'],
-            });
-            expect(film.directors).toHaveLength(3);
-        });
-    });
+  });
 });

@@ -14,7 +14,8 @@ export const UpdateFilmSchema = CreateFilmSchema.partial();
 export const FilmSchema = CreateFilmSchema.extend({
     id: z.string(),
     createdAt: z.date(),
-    updatedAt: z.date()
+    updatedAt: z.date(),
+    ownerId: z.string().optional(),
 });
 
 export type CreateFilm = z.infer<typeof CreateFilmSchema>;

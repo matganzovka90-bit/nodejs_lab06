@@ -5,6 +5,7 @@ export interface IFilm extends Document {
     description: string;
     release_year: number;
     directors: string[];
+    ownerId: mongoose.Types.ObjectId | string; 
     createdAt: Date;
     updatedAt: Date;
     age?: number;
@@ -39,6 +40,12 @@ const FilmSchema = new Schema<IFilm>(
                 validator: (arr: string[]) => arr.length > 0,
                 message: "Повинен бути хоча б один режисер"
             }
+        },
+
+        ownerId: {
+            type: Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
         }
     },
     {

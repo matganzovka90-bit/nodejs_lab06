@@ -4,9 +4,9 @@ import { filmRepository, FilmSortField, FilmFilters } from '../storage/entity';
 import { SortParams } from '../types/pagination.types';
 import { validate } from '../middleware/validate';
 import { CreateFilmSchema, UpdateFilmSchema } from '../schemas/entity.schema';
+import { requireAuth } from '../middleware/auth'; 
 
 const router = Router();
-
 
 const isValidId = (id: string): boolean =>
     Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
@@ -85,41 +85,63 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     }
 });
 
-router.post('/', validate(CreateFilmSchema), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/', requireAuth, validate(CreateFilmSchema), async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const film = await filmRepository.create(req.body);
+        const filmData = {
+            ...req.body,
+            ownerId: (req as any).userId 
+        };
+
+        const film = await filmRepository.create(filmData);
         res.status(201).json(film);
     } catch (err) {
         next(err);
     }
 });
 
-router.patch('/:id', validate(UpdateFilmSchema), async (req: Request, res: Response, next: NextFunction) => {
+const handleUpdate = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const id = req.params.id as string;
         if (!isValidId(id)) {
             return res.status(400).json({ status: 'error', message: 'Invalid ID format' });
         }
-        const film = await filmRepository.update(id, req.body);
+
+        const film = await filmRepository.findById(id) as any;
         if (!film) {
             return res.status(404).json({ status: 'error', message: 'Film not found' });
         }
-        res.json(film);
+
+        if (film.ownerId.toString() !== (req as any).userId) {
+            return res.sendStatus(403);
+        }
+
+        const updatedFilm = await filmRepository.update(id, req.body);
+        res.json(updatedFilm);
     } catch (err) {
         next(err);
     }
-});
+};
 
-router.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
+router.put('/:id', requireAuth, validate(UpdateFilmSchema), handleUpdate);
+router.patch('/:id', requireAuth, validate(UpdateFilmSchema), handleUpdate);
+
+router.delete('/:id', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
     try {
         const id = req.params.id as string;
         if (!isValidId(id)) {
             return res.status(400).json({ status: 'error', message: 'Invalid ID format' });
         }
-        const deleted = await filmRepository.delete(id);
-        if (!deleted) {
+
+        const film = await filmRepository.findById(id) as any;
+        if (!film) {
             return res.status(404).json({ status: 'error', message: 'Film not found' });
         }
+
+        if (film.ownerId.toString() !== (req as any).userId) {
+            return res.sendStatus(403);
+        }
+
+        await filmRepository.delete(id);
         res.status(204).send();
     } catch (err) {
         next(err);

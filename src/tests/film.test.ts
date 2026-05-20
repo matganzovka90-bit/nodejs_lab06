@@ -3,6 +3,11 @@ import app from '../app';
 import { FilmModel } from '../models/film.model';
 import { connectTestDB, disconnectTestDB, clearTestDB } from './setup';
 import mongoose from 'mongoose';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'default_secret_key';
+const MOCK_USER_ID = new mongoose.Types.ObjectId().toString();
+const authCookie = `access_token=${jwt.sign({ userId: MOCK_USER_ID }, JWT_SECRET)}`;
 
 beforeAll(async () => await connectTestDB());
 afterAll(async () => await disconnectTestDB());
@@ -10,19 +15,22 @@ afterEach(async () => await clearTestDB());
 
 
 const createFilm = (overrides = {}) =>
-    request(app).post('/api/films').send({
-        title: 'Inception',
-        description: 'Sci-fi thriller',
-        release_year: 2010,
-        directors: ['Nolan'],
-        ...overrides,
-    });
+    request(app)
+        .post('/api/films')
+        .set('Cookie', [authCookie])
+        .send({
+            title: 'Inception',
+            description: 'Sci-fi thriller',
+            release_year: 2010,
+            directors: ['Nolan'],
+            ...overrides,
+        });
 
 const seedFilms = async () => {
     await FilmModel.create([
-        { title: 'Pulp Fiction', description: 'Crime', release_year: 1994, directors: ['Tarantino'] },
-        { title: 'Interstellar', description: 'Sci-fi', release_year: 2014, directors: ['Nolan'] },
-        { title: 'Inception', description: 'Sci-fi', release_year: 2010, directors: ['Nolan'] },
+        { title: 'Pulp Fiction', description: 'Crime', release_year: 1994, directors: ['Tarantino'], ownerId: MOCK_USER_ID },
+        { title: 'Interstellar', description: 'Sci-fi', release_year: 2014, directors: ['Nolan'], ownerId: MOCK_USER_ID },
+        { title: 'Inception', description: 'Sci-fi', release_year: 2010, directors: ['Nolan'], ownerId: MOCK_USER_ID },
     ]);
 };
 
@@ -62,11 +70,14 @@ describe('POST /api/films', () => {
     });
 
     it('7. should use empty string as default description', async () => {
-        const res = await request(app).post('/api/films').send({
-            title: 'No Desc',
-            release_year: 2000,
-            directors: ['A'],
-        });
+        const res = await request(app)
+            .post('/api/films')
+            .set('Cookie', [authCookie])
+            .send({
+                title: 'No Desc',
+                release_year: 2000,
+                directors: ['A'],
+            });
         expect(res.statusCode).toBe(201);
         expect(res.body.description).toBe('');
     });
@@ -158,7 +169,7 @@ describe('GET /api/films/classic', () => {
     });
 
     it('18. should return empty array if no classic films', async () => {
-        await FilmModel.create({ title: 'New', release_year: 2020, directors: ['A'] });
+        await FilmModel.create({ title: 'New', release_year: 2020, directors: ['A'], ownerId: MOCK_USER_ID });
         const res = await request(app).get('/api/films/classic');
         expect(res.body).toHaveLength(0);
     });
@@ -192,6 +203,7 @@ describe('PATCH /api/films/:id', () => {
         const created = await createFilm();
         const res = await request(app)
             .patch(`/api/films/${created.body.id}`)
+            .set('Cookie', [authCookie])
             .send({ title: 'Updated' });
         expect(res.statusCode).toBe(200);
         expect(res.body.title).toBe('Updated');
@@ -203,6 +215,7 @@ describe('PATCH /api/films/:id', () => {
         await new Promise(r => setTimeout(r, 20));
         const res = await request(app)
             .patch(`/api/films/${created.body.id}`)
+            .set('Cookie', [authCookie])
             .send({ title: 'Changed' });
         expect(new Date(res.body.updatedAt).getTime())
             .toBeGreaterThan(new Date(res.body.createdAt).getTime());
@@ -212,6 +225,7 @@ describe('PATCH /api/films/:id', () => {
         const created = await createFilm();
         const res = await request(app)
             .patch(`/api/films/${created.body.id}`)
+            .set('Cookie', [authCookie])
             .send({ release_year: 3000 });
         expect(res.statusCode).toBe(400);
     });
@@ -219,6 +233,7 @@ describe('PATCH /api/films/:id', () => {
     it('25. should return 404 for non-existent ObjectId', async () => {
         const res = await request(app)
             .patch('/api/films/000000000000000000000000')
+            .set('Cookie', [authCookie])
             .send({ title: 'Ghost' });
         expect(res.statusCode).toBe(404);
     });
@@ -226,8 +241,23 @@ describe('PATCH /api/films/:id', () => {
     it('26. should return 400 for invalid ID format', async () => {
         const res = await request(app)
             .patch('/api/films/bad-id')
+            .set('Cookie', [authCookie])
             .send({ title: 'Ghost' });
         expect(res.statusCode).toBe(400);
+    });
+
+    it('26b. should update film using PUT', async () => {
+        const created = await createFilm();
+        const res = await request(app)
+            .put(`/api/films/${created.body.id}`)
+            .set('Cookie', [authCookie])
+            .send({ 
+                title: 'PUT Updated',
+                release_year: 2022,
+                directors: ['Someone']
+            });
+        expect(res.statusCode).toBe(200);
+        expect(res.body.title).toBe('PUT Updated');
     });
 });
 
@@ -236,24 +266,26 @@ describe('DELETE /api/films/:id', () => {
 
     it('27. should delete film and return 204', async () => {
         const created = await createFilm();
-        const res = await request(app).delete(`/api/films/${created.body.id}`);
+        const res = await request(app)
+            .delete(`/api/films/${created.body.id}`)
+            .set('Cookie', [authCookie]);
         expect(res.statusCode).toBe(204);
     });
 
     it('28. should return 404 on second delete of same film', async () => {
         const created = await createFilm();
-        await request(app).delete(`/api/films/${created.body.id}`);
-        const res = await request(app).delete(`/api/films/${created.body.id}`);
+        await request(app).delete(`/api/films/${created.body.id}`).set('Cookie', [authCookie]);
+        const res = await request(app).delete(`/api/films/${created.body.id}`).set('Cookie', [authCookie]);
         expect(res.statusCode).toBe(404);
     });
 
     it('29. should return 404 for non-existent ObjectId', async () => {
-        const res = await request(app).delete('/api/films/000000000000000000000000');
+        const res = await request(app).delete('/api/films/000000000000000000000000').set('Cookie', [authCookie]);
         expect(res.statusCode).toBe(404);
     });
 
     it('30. should return 400 for invalid ID format', async () => {
-        const res = await request(app).delete('/api/films/bad-id');
+        const res = await request(app).delete('/api/films/bad-id').set('Cookie', [authCookie]);
         expect(res.statusCode).toBe(400);
     });
 });
